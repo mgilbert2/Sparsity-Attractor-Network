@@ -15,18 +15,28 @@ def recall(net, task, list_name):
     Candidates are all B and C items, so a wrong-list answer counts
     as an error.
     """
+    # The network's B/C output for each probe (A and L given, B/C blank).
     y = net.forward(task.probe(list_name))[:, task.layout.bc]
+
+    # Squared distance from each output to each of the B and C items.
     candidates = np.vstack([task.B, task.C])
     dist = ((y[:, None, :] - candidates[None, :, :]) ** 2).sum(-1)
+
+    # The correct answer for pair i is B_i, or C_i on the AC list.
     correct = np.arange(task.n_pairs)
     if list_name == "AC":
         correct = correct + task.n_pairs
+
+    # Count a pair as recalled if its nearest candidate is the correct one.
     return float((dist.argmin(1) == correct).mean())
 
 
 def train_epoch(net, task, list_name, rng, with_probes=True):
+    """One pass through a list, one backprop step per pattern, shuffled."""
     full = task.full(list_name)
     inputs = [full]
+    # Optionally also train on blank-slot probes, with the full pattern
+    # as the target, so the network practices filling in B/C.
     if with_probes:
         inputs.append(task.probe(list_name))
     x = np.vstack(inputs)
@@ -37,6 +47,11 @@ def train_epoch(net, task, list_name, rng, with_probes=True):
 
 def run(n_pairs=8, n_hidden=40, lr=0.2, epochs_ab=100, epochs_ac=100,
         with_probes=True, seed=0):
+    """Train on AB, then AC, testing recall on both lists after each epoch.
+
+    Returns the network, the task, and a history of
+    (phase, AB recall, AC recall), one entry per epoch.
+    """
     task = make_task(n_pairs, Layout(), seed)
     net = Autoencoder(task.layout.size, n_hidden, lr, seed)
     rng = np.random.default_rng(seed)
@@ -50,6 +65,7 @@ def run(n_pairs=8, n_hidden=40, lr=0.2, epochs_ab=100, epochs_ac=100,
 
 
 def print_history(history, every):
+    """Print recall for the first epoch and every Nth epoch after."""
     print("epoch  phase  AB     AC")
     for i, (phase, ab, ac) in enumerate(history, 1):
         if i % every == 0 or i == 1:
@@ -57,6 +73,7 @@ def print_history(history, every):
 
 
 def plot_history(history, path):
+    """Save AB and AC recall by epoch, with a line at the list switch."""
     import matplotlib.pyplot as plt
 
     epochs = np.arange(1, len(history) + 1)
@@ -78,6 +95,7 @@ def plot_history(history, path):
 
 
 def main():
+    """Command-line entry point: parse flags, run, print, and plot."""
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--pairs", type=int, default=8)
     p.add_argument("--hidden", type=int, default=40)
