@@ -45,15 +45,15 @@ def train_epoch(net, task, list_name, rng, with_probes=True):
         net.train_step(x[i], t[i])
 
 
-def run(n_pairs=8, n_hidden=40, lr=0.2, epochs_ab=100, epochs_ac=100,
-        with_probes=True, seed=0):
+def run(n_pairs=8, n_hidden=40, lr=0.2, sparsity=1.0, epochs_ab=100,
+        epochs_ac=100, with_probes=True, seed=0):
     """Train on AB, then AC, testing recall on both lists after each epoch.
 
     Returns the network, the task, and a history of
     (phase, AB recall, AC recall), one entry per epoch.
     """
     task = make_task(n_pairs, Layout(), seed)
-    net = Autoencoder(task.layout.size, n_hidden, lr, seed)
+    net = Autoencoder(task.layout.size, n_hidden, lr, sparsity, seed)
     rng = np.random.default_rng(seed)
     history = []
     for phase, n_epochs in (("AB", epochs_ab), ("AC", epochs_ac)):
@@ -100,6 +100,8 @@ def main():
     p.add_argument("--pairs", type=int, default=8)
     p.add_argument("--hidden", type=int, default=40)
     p.add_argument("--lr", type=float, default=0.2)
+    p.add_argument("--sparsity", type=float, default=1.0,
+                   help="fraction of hidden units active (1.0 = dense)")
     p.add_argument("--epochs-ab", type=int, default=100)
     p.add_argument("--epochs-ac", type=int, default=100)
     p.add_argument("--no-probes", action="store_true",
@@ -110,8 +112,10 @@ def main():
     p.add_argument("--plot", type=Path, default=None,
                    help="save a recall curve to this path")
     args = p.parse_args()
-    _, _, history = run(args.pairs, args.hidden, args.lr, args.epochs_ab,
-                        args.epochs_ac, not args.no_probes, args.seed)
+    net, _, history = run(args.pairs, args.hidden, args.lr, args.sparsity,
+                          args.epochs_ab, args.epochs_ac, not args.no_probes,
+                          args.seed)
+    print(f"{net.k} of {args.hidden} hidden units active\n")
     print_history(history, args.every)
     if args.plot:
         plot_history(history, args.plot)
