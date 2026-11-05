@@ -1,18 +1,14 @@
+# Show available commands
 default:
-    @just --list
+    @echo "just run    Train AB then AC and print recall"
+    @echo "just plot   Same, and save a recall plot to figures/"
+    @echo "just pure   Train on full patterns only"
 
-# Show one-line recall results for every AB/AC pair.
-sim:
-    python3 paired_associate.py summary
+run *args:
+    uv run python -m src.abac {{args}}
 
-# Choose a cue and context, then watch the target layer settle.
-play:
-    python3 paired_associate.py play
+plot *args:
+    uv run python -m src.abac --plot figures/abac.png {{args}}
 
-# Animate AB, no-context, and AC recall in the terminal.
-movie:
-    python3 paired_associate.py movie
-
-# Save the same animation as an animated GIF (requires Pillow).
-gif:
-    python3 paired_associate.py gif
+pure *args:
+    uv run python -m src.abac --no-probes {{args}}
