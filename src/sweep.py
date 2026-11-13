@@ -15,7 +15,8 @@ METRICS = ("ab_after_ab", "ab_after_ac", "ac_after_ac", "ab_forgetting",
 
 def sweep(targets=(None, 0.05, 0.1, 0.2, 0.4), seeds=range(5),
           hopfield_steps=(0, 3), n_pairs=8, n_hidden=40, lr=0.2,
-          epochs_ab=100, epochs_ac=100, sparsity_weight=1.0, with_probes=True):
+          epochs_ab=100, epochs_ac=100, sparsity_weight=1.0, with_probes=True,
+          sparsity=1.0):
     """Yield one result per setting and seed, keeping all other factors fixed."""
     if epochs_ab < 1 or epochs_ac < 1:
         raise ValueError("Both training phases need at least one epoch")
@@ -26,15 +27,17 @@ def sweep(targets=(None, 0.05, 0.1, 0.2, 0.4), seeds=range(5),
                     n_pairs=n_pairs, n_hidden=n_hidden, lr=lr,
                     epochs_ab=epochs_ab, epochs_ac=epochs_ac,
                     with_probes=with_probes, seed=seed, hopfield_steps=steps,
-                    hidden_target=target, sparsity_weight=sparsity_weight)
+                    hidden_target=target, sparsity_weight=sparsity_weight,
+                    sparsity=sparsity)
                 # Test activity on the same partial cues used to measure recall.
                 probes = np.vstack([task.probe("AB"), task.probe("AC")])
-                hidden = net.hopfield.forward(net.encode(probes))
+                hidden = net.hidden_state(probes)
                 ab_after_ab = history[epochs_ab - 1][1]
                 ab_after_ac, ac_after_ac = history[-1][1:]
                 yield {
                     "hopfield_steps": steps, "hidden_target": target, "seed": seed,
                     "sparsity_weight": sparsity_weight, "n_hidden": n_hidden,
+                    "sparsity": sparsity, "k_active": net.k,
                     "n_pairs": n_pairs, "lr": lr, "epochs_ab": epochs_ab,
                     "epochs_ac": epochs_ac, "with_probes": with_probes,
                     "ab_after_ab": ab_after_ab, "ab_after_ac": ab_after_ac,
@@ -94,6 +97,8 @@ def main():
     parser.add_argument("--epochs-ab", type=int, default=100)
     parser.add_argument("--epochs-ac", type=int, default=100)
     parser.add_argument("--sparsity-weight", type=float, default=1.0)
+    parser.add_argument("--sparsity", type=float, default=1.0,
+                        help="fraction of hidden positions retained after settling")
     parser.add_argument("--no-probes", action="store_true")
     parser.add_argument("--output", type=Path, default=Path("figures/hidden_sparsity.csv"))
     parser.add_argument("--plot", type=Path, default=None)
@@ -104,6 +109,8 @@ def main():
         parser.error("seeds and Hopfield steps must be nonnegative")
     if not np.isfinite(args.sparsity_weight) or args.sparsity_weight < 0:
         parser.error("sparsity weight must be finite and nonnegative")
+    if not 0 <= args.sparsity <= 1:
+        parser.error("sparsity must be between 0 and 1")
     for values in (args.targets, args.seeds, args.hopfield_steps):
         if len(values) != len(set(values)):
             parser.error("targets, seeds, and Hopfield step settings must be unique")
@@ -114,7 +121,8 @@ def main():
         targets=args.targets, seeds=args.seeds, hopfield_steps=args.hopfield_steps,
         n_pairs=args.pairs, n_hidden=args.hidden, lr=args.lr,
         epochs_ab=args.epochs_ab, epochs_ac=args.epochs_ac,
-        sparsity_weight=args.sparsity_weight, with_probes=not args.no_probes)
+        sparsity_weight=args.sparsity_weight, with_probes=not args.no_probes,
+        sparsity=args.sparsity)
     with args.output.open("w", newline="", encoding="utf-8") as handle:
         writer = None
         for row in experiments:

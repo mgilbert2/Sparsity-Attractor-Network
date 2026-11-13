@@ -45,8 +45,8 @@ def train_epoch(net, task, list_name, rng, with_probes=True):
         net.train_step(x[i], t[i])
 
 
-def run(n_pairs=8, n_hidden=40, lr=0.2, epochs_ab=100, epochs_ac=100,
-        with_probes=True, seed=0, hopfield_steps=3,
+def run(n_pairs=8, n_hidden=40, lr=0.2, sparsity=1.0, epochs_ab=100,
+        epochs_ac=100, with_probes=True, seed=0, hopfield_steps=3,
         hidden_target=None, sparsity_weight=1.0):
     """Train on AB, then AC, testing recall on both lists after each epoch.
 
@@ -54,7 +54,8 @@ def run(n_pairs=8, n_hidden=40, lr=0.2, epochs_ab=100, epochs_ac=100,
     (phase, AB recall, AC recall), one entry per epoch.
     """
     task = make_task(n_pairs, Layout(), seed)
-    net = Autoencoder(task.layout.size, n_hidden, lr, seed, hopfield_steps,
+    net = Autoencoder(task.layout.size, n_hidden, lr=lr, sparsity=sparsity,
+                      seed=seed, hopfield_steps=hopfield_steps,
                       hidden_target=hidden_target, sparsity_weight=sparsity_weight)
     rng = np.random.default_rng(seed)
     history = []
@@ -108,6 +109,8 @@ def main():
     p.add_argument("--sparsity-weight", type=float, default=1.0,
                    help="strength of the hidden activity penalty")
     p.add_argument("--lr", type=float, default=0.2)
+    p.add_argument("--sparsity", type=float, default=1.0,
+                   help="fraction of hidden positions retained after settling (1.0 = all)")
     p.add_argument("--epochs-ab", type=int, default=100)
     p.add_argument("--epochs-ac", type=int, default=100)
     p.add_argument("--no-probes", action="store_true",
@@ -120,13 +123,19 @@ def main():
     args = p.parse_args()
     if args.hopfield_steps < 0:
         p.error("--hopfield-steps must be nonnegative")
+    if not 0 <= args.sparsity <= 1:
+        p.error("--sparsity must be between 0 and 1")
     if args.hidden_target is not None and not 0 <= args.hidden_target <= 1:
         p.error("--hidden-target must be between 0 and 1")
     if not np.isfinite(args.sparsity_weight) or args.sparsity_weight < 0:
         p.error("--sparsity-weight must be finite and nonnegative")
-    _, _, history = run(args.pairs, args.hidden, args.lr, args.epochs_ab,
-                        args.epochs_ac, not args.no_probes, args.seed,
-                        args.hopfield_steps, args.hidden_target, args.sparsity_weight)
+    net, _, history = run(
+        n_pairs=args.pairs, n_hidden=args.hidden, lr=args.lr, sparsity=args.sparsity,
+        epochs_ab=args.epochs_ab, epochs_ac=args.epochs_ac,
+        with_probes=not args.no_probes, seed=args.seed,
+        hopfield_steps=args.hopfield_steps, hidden_target=args.hidden_target,
+        sparsity_weight=args.sparsity_weight)
+    print(f"{net.k} of {args.hidden} hidden positions retained after settling\n")
     print_history(history, args.every)
     if args.plot:
         plot_history(history, args.plot)

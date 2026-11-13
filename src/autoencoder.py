@@ -3,13 +3,14 @@
 import numpy as np
 
 from src.hopfield import Hopfield, sigmoid
+from src.sparsity import k_winners_take_all, n_active
 
 
 class Autoencoder:
     """Encode an input, settle the hidden Hopfield network, then decode."""
 
-    def __init__(self, n_in, n_hidden, lr=0.2, seed=0, hopfield_steps=3,
-                 hidden_target=None, sparsity_weight=1.0):
+    def __init__(self, n_in, n_hidden, lr=0.2, sparsity=1.0, seed=0,
+                 hopfield_steps=3, hidden_target=None, sparsity_weight=1.0):
         """Initialize the encoder, decoder, and hidden recurrent connections."""
         if hidden_target is not None and not 0 <= hidden_target <= 1:
             raise ValueError("Hidden activity target must be between 0 and 1")
@@ -26,10 +27,18 @@ class Autoencoder:
         self.hidden_target = hidden_target
         self.sparsity_weight = sparsity_weight
         self.lr = lr  # learning rate
+        # How many hidden units may be active on each pattern.
+        # sparsity is the fraction active, so 1.0 means no constraint.
+        self.k = n_active(n_hidden, sparsity)
 
     def encode(self, x):
         """Input pattern to the external drive of the hidden Hopfield neurons."""
         return x @ self.W + self.b
+
+    def hidden_state(self, x):
+        """Settle the Hopfield state and retain k winners for the decoder."""
+        settled = self.hopfield.forward(self.encode(x))
+        return k_winners_take_all(settled, self.k)
 
     def decode(self, h):
         """Hidden activations to output pattern."""
@@ -37,14 +46,13 @@ class Autoencoder:
 
     def forward(self, x):
         """Input pattern to output pattern."""
-        h = self.hopfield.forward(self.encode(x))
-        return self.decode(h)
+        return self.decode(self.hidden_state(x))
 
     def activity_penalty(self, h):
         """Return the population activity penalty and its hidden-state gradient."""
         if self.hidden_target is None or self.sparsity_weight == 0:
             return 0.0, np.zeros_like(h)
-        # Target the mean across neurons within each pattern, after settling.
+        # Target the mean of the code actually passed to the decoder.
         difference = h.mean(axis=-1, keepdims=True) - self.hidden_target
         loss = 0.5 * self.sparsity_weight * h.shape[-1] * np.sum(difference ** 2)
         gradient = np.broadcast_to(self.sparsity_weight * difference, h.shape)
@@ -53,13 +61,15 @@ class Autoencoder:
     def train_step(self, x, target):
         """One backprop step on cross-entropy plus optional hidden sparsity loss."""
         # Forward pass.
-        h, cache = self.hopfield.forward(self.encode(x), return_cache=True)
+        settled, cache = self.hopfield.forward(self.encode(x), return_cache=True)
+        h, mask = k_winners_take_all(settled, self.k, return_mask=True)
         y = self.decode(h)
 
         # Error at the output, then through the hidden settling dynamics.
         d_out = y - target
         _, d_activity = self.activity_penalty(h)
-        d_hidden = d_out @ self.W_out.T + d_activity
+        # The hard gate passes gradients only through retained activations.
+        d_hidden = (d_out @ self.W_out.T + d_activity) * mask
         d_drive, d_recurrent = self.hopfield.backward(d_hidden, cache)
 
         # Move each weight a small step to reduce the error.

@@ -37,6 +37,10 @@ The encoder supplies a drive `u = x @ W + b`. Hidden activations start at `sigmo
 
 Neurons are visited in index order on each sweep. The fixed sweep count bounds computation but does not guarantee that the state has reached equilibrium. Recurrent gradients are projected onto symmetric, zero-diagonal connections after backpropagating through the actual update sequence. Encoder and decoder weights are independent; the decoder is not constrained to be the encoder's transpose.
 
+An optional k-winners-take-all readout applies **after** Hopfield settling and before decoding. `--sparsity` sets the fraction of hidden positions retained: `k = max(1, round(sparsity * n_hidden))`. The k largest activations keep their values and all other positions are set to zero. For example, `--hidden 40 --sparsity 0.1` retains 4 positions per pattern. The default, `--sparsity 1.0`, retains every position. The minimum is one retained position, including when the fraction is zero.
+
+The recurrent updates themselves use the full continuous state. The hard readout gate is applied afterward, so the Hopfield energy-descent argument concerns the state before that gate. Training backpropagates through retained positions; non-winning positions receive no direct gradient through the gate, though they can still affect winners through recurrence. With zero recurrent sweeps, this reproduces the feedforward k-winner model.
+
 ## Running
 
 | Command | Purpose |
@@ -69,7 +73,9 @@ uv run python -m src.sweep
 uv run python -m src.sweep --targets none 0.05 0.1 0.2 0.4 --seeds 0 1 2 3 4 --plot figures/hidden_sparsity.png
 ```
 
-The training objective adds `sparsity_weight * n_hidden / 2 * (mean(h) - hidden_target)^2` to reconstruction cross-entropy. The target encourages a level of activity; it does not enforce an exact number of active neurons. Omitting the target, or setting its weight to zero, preserves the original training objective. The penalty is applied during training; inference uses the learned weights and the same Hopfield dynamics.
+The training objective adds `sparsity_weight * n_hidden / 2 * (mean(h) - hidden_target)^2` to reconstruction cross-entropy, where `h` is the code passed to the decoder after any k-winner gate. The target encourages a level of activity; it does not enforce an exact number of active neurons. Omitting the target, or setting its weight to zero, preserves the reconstruction objective. The penalty is applied during training; inference uses the learned weights, Hopfield dynamics, and optional k-winner gate.
+
+`--sparsity` and `--hidden-target` are separate controls: the first retains a fixed number of positions, and the second encourages a mean activation. They can be combined, but the hard gate limits the achievable mean activity to at most `k / n_hidden` because all other positions are zero.
 
 The default sweep compares no penalty and targets of 0.05, 0.1, 0.2, and 0.4, using seeds 0–4. It tests both the feedforward control (0 recurrent sweeps) and the Hopfield model (3 sweeps), keeping hidden width, input patterns, initialization, and training order matched within each seed. Use `--hopfield-steps 3` to test only the Hopfield model. Both training phases use 100 epochs, as in the main experiment; the same epoch, hidden-width, pair-count, learning-rate, and probe-training options are available.
 
@@ -83,6 +89,7 @@ Every configuration starts with a fresh network. Completed raw rows are flushed 
 | --- | --- | --- |
 | `--pairs` | `8` | Number of associations per list. |
 | `--hidden` | `40` | Number of hidden neurons; independent of activity sparsity. |
+| `--sparsity` | `1.0` | Fraction of hidden positions retained by k-winners-take-all after settling; between 0 and 1, with at least one retained position. |
 | `--lr` | `0.2` | Learning rate for all trainable connections. |
 | `--epochs-ab`, `--epochs-ac` | `100` each | Training epochs per phase. |
 | `--hopfield-steps` | `3` for `src.abac`; `0 3` for `src.sweep` | Recurrent sweeps; zero is the feedforward control. The sweep accepts multiple values. |
@@ -95,7 +102,9 @@ Every configuration starts with a fresh network. Completed raw rows are flushed 
 | `--plot` | Unset | Optional output image path. |
 | `--output` | `figures/hidden_sparsity.csv` | Raw CSV path for `src.sweep`. |
 
-`just pure` changes training examples; use `--hopfield-steps 0` to disable recurrence. For a feedforward sparsity control, run `just run --hopfield-steps 0 --hidden-target 0.1`. Increasing `--sparsity-weight` gives the activity target more influence relative to reconstruction. The penalty operates during learning; inference uses the learned weights and Hopfield updates without an additional sparsity mask.
+`just pure` changes training examples; use `--hopfield-steps 0` to disable recurrence. For a feedforward soft-activity control, run `just run --hopfield-steps 0 --hidden-target 0.1`. Increasing `--sparsity-weight` gives the activity target more influence relative to reconstruction.
+
+For a hard k-winner experiment, run `just run --sparsity 0.1`. The sweep also accepts one fixed `--sparsity` value, for example `just sweep --sparsity 0.1 --hopfield-steps 3`. Its `--targets` grid varies the soft activity target while keeping the k-winner fraction fixed.
 
 For a small command-line smoke run:
 
@@ -113,14 +122,16 @@ Use `uv run python -m src.abac --help` or `uv run python -m src.sweep --help` fo
 | `ab_after_ac` | AB recall retained at the end of AC training. |
 | `ac_after_ac` | AC recall at the end of AC training. |
 | `ab_forgetting` | `ab_after_ab - ab_after_ac`; larger positive values mean more forgetting. |
-| `mean_hidden` | Mean sigmoid activation over neurons and final recall probes from both lists. |
+| `mean_hidden` | Mean hidden activation after the optional k-winner gate, over neurons and final recall probes from both lists. |
 | `fraction_above_half` | Fraction of those activations strictly above 0.5. This is a diagnostic threshold, not a training constraint. |
 
 Raw rows also record the seed and training settings. Summary columns end in `_mean` or `_sd`; `_sd` is sample standard deviation across seeds, not standard error or a confidence interval. With one seed, the reported deviation is zero. A target of 0.05 does not enforce exactly 5% active neurons, so use the measured activity columns when comparing representations.
 
+New raw outputs also record `sparsity` and `k_active`, the requested hard fraction and resulting number of retained positions.
+
 ### Initial 50-run results
 
-The recorded sweep used 8 pairs, 40 hidden neurons, learning rate 0.2, 100 AB epochs followed by 100 AC epochs, probe training enabled, sparsity weight 1, seeds 0 through 4, and 0 or 3 recurrent sweeps. The following command reproduces those settings and creates a plot:
+The recorded sweep used 8 pairs, 40 hidden neurons, learning rate 0.2, 100 AB epochs followed by 100 AC epochs, probe training enabled, sparsity weight 1, seeds 0 through 4, and 0 or 3 recurrent sweeps. The hard fraction was 1.0, so every hidden position was retained. The following command reproduces those settings and creates a plot:
 
 ```powershell
 uv run python -m src.sweep --plot figures/hidden_sparsity.png
@@ -142,15 +153,16 @@ The 2.5% mean represents one correctly retained AB pair in one seed out of five.
 
 ![Initial hidden sparsity sweep](results/hidden_sparsity.png)
 
-The recorded runs and 13 automated checks passed with a locally available Python 3.10.12 and NumPy 1.23.5 fallback. Validation under the project's declared Python 3.11+ remains outstanding. The recorded chart was rendered with R 4.3.1; the Python `--plot` command uses Matplotlib. Generated files in `figures/` are ignored by Git; the files in `results/` preserve this particular experiment.
+The recorded runs used a locally available Python 3.10.12 and NumPy 1.23.5 fallback. Validation under the project's declared Python 3.11+ remains outstanding. The recorded chart was rendered with R 4.3.1; the Python `--plot` command uses Matplotlib. Generated files in `figures/` are ignored by Git; the files in `results/` preserve this particular experiment.
 
 ## Functions and programmatic use
 
 | Module | Main functions and classes |
 | --- | --- |
 | [src/patterns.py](src/patterns.py) | `Layout` defines input sections; `make_task()` creates paired lists; `Task.full()` and `Task.probe()` provide complete patterns and recall cues. |
-| [src/autoencoder.py](src/autoencoder.py) | `Autoencoder.encode()` returns external drive, `decode()` reconstructs from hidden activations, `forward()` performs encode-settle-decode, `activity_penalty()` returns activity loss and its gradient, and `train_step()` updates all trainable connections. |
+| [src/autoencoder.py](src/autoencoder.py) | `Autoencoder.encode()` returns external drive, `hidden_state()` settles the state and applies the optional k-winner gate, `decode()` reconstructs from that code, `forward()` runs the complete model, `activity_penalty()` returns activity loss and its gradient, and `train_step()` updates all trainable connections. |
 | [src/hopfield.py](src/hopfield.py) | `Hopfield.forward()` runs recurrent sweeps for a vector or batch; `return_cache=True` also returns the update history. `backward()` uses that cache to return drive and constrained recurrent gradients. |
+| [src/sparsity.py](src/sparsity.py) | `n_active()` converts the hard fraction to a retained count. `k_winners_take_all()` masks all other activations; `return_mask=True` also provides the mask for backpropagation. |
 | [src/abac.py](src/abac.py) | `train_epoch()` trains one shuffled pass, `recall()` scores a list, and `run()` returns the trained model, task, and epoch history. `print_history()` and `plot_history()` display that history. |
 | [src/sweep.py](src/sweep.py) | `sweep()` yields one result dictionary per setting and seed. `summarize()` computes grouped means and sample standard deviations. |
 | [src/sweep_plot.py](src/sweep_plot.py) | `plot_summary()` saves the four-panel comparison from a sweep summary. |
@@ -167,7 +179,7 @@ net, task, history = run(
 
 probes = task.probe("AB")                  # Shape: (8, 50).
 drive = net.encode(probes)                  # Shape: (8, 40); before sigmoid.
-hidden = net.hopfield.forward(drive)        # Settled activations, shape (8, 40).
+hidden = net.hidden_state(probes)          # Settled, optionally gated code, shape (8, 40).
 output = net.decode(hidden)                 # Same computation as net.forward(probes).
 print("AB retained:", recall(net, task, "AB"))
 print("AC learned:", recall(net, task, "AC"))
@@ -182,4 +194,4 @@ print("Mean hidden activity:", hidden.mean())
 uv run python -m unittest discover -s tests -v
 ```
 
-The 13 checks cover numerical gradients through encoder, decoder, recurrence, and the activity penalty; energy descent during asynchronous updates; finite activations for extreme inputs; vector/batch agreement; equivalence to the original model with recurrence disabled; reduced activity under a low target; matched zero-penalty controls; summary statistics; and CSV output from a small command-line sweep.
+The automated checks cover numerical gradients through encoder, decoder, recurrence, the k-winner gate, and the activity penalty; energy descent during asynchronous updates; finite activations for extreme inputs; vector/batch agreement; equivalence to the dense and k-winner feedforward models with recurrence disabled; retained-position counts and sparsity validation; reduced activity under a low target; matched zero-penalty controls; summary statistics; and CSV output from a small command-line sweep. All 20 current checks passed with the Python 3.10 fallback described above.
