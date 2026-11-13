@@ -46,14 +46,16 @@ def train_epoch(net, task, list_name, rng, with_probes=True):
 
 
 def run(n_pairs=8, n_hidden=40, lr=0.2, epochs_ab=100, epochs_ac=100,
-        with_probes=True, seed=0):
+        with_probes=True, seed=0, hopfield_steps=3,
+        hidden_target=None, sparsity_weight=1.0):
     """Train on AB, then AC, testing recall on both lists after each epoch.
 
     Returns the network, the task, and a history of
     (phase, AB recall, AC recall), one entry per epoch.
     """
     task = make_task(n_pairs, Layout(), seed)
-    net = Autoencoder(task.layout.size, n_hidden, lr, seed)
+    net = Autoencoder(task.layout.size, n_hidden, lr, seed, hopfield_steps,
+                      hidden_target=hidden_target, sparsity_weight=sparsity_weight)
     rng = np.random.default_rng(seed)
     history = []
     for phase, n_epochs in (("AB", epochs_ab), ("AC", epochs_ac)):
@@ -99,19 +101,32 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--pairs", type=int, default=8)
     p.add_argument("--hidden", type=int, default=40)
+    p.add_argument("--hopfield-steps", type=int, default=3,
+                   help="recurrent sweeps over hidden units (0: plain autoencoder)")
+    p.add_argument("--hidden-target", type=float, default=None,
+                   help="soft target for mean hidden activity per pattern (0 to 1)")
+    p.add_argument("--sparsity-weight", type=float, default=1.0,
+                   help="strength of the hidden activity penalty")
     p.add_argument("--lr", type=float, default=0.2)
     p.add_argument("--epochs-ab", type=int, default=100)
     p.add_argument("--epochs-ac", type=int, default=100)
     p.add_argument("--no-probes", action="store_true",
-                   help="train on full patterns only (pure autoencoder)")
+                   help="train on full patterns only")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--every", type=int, default=10,
                    help="print every N epochs")
     p.add_argument("--plot", type=Path, default=None,
                    help="save a recall curve to this path")
     args = p.parse_args()
+    if args.hopfield_steps < 0:
+        p.error("--hopfield-steps must be nonnegative")
+    if args.hidden_target is not None and not 0 <= args.hidden_target <= 1:
+        p.error("--hidden-target must be between 0 and 1")
+    if not np.isfinite(args.sparsity_weight) or args.sparsity_weight < 0:
+        p.error("--sparsity-weight must be finite and nonnegative")
     _, _, history = run(args.pairs, args.hidden, args.lr, args.epochs_ab,
-                        args.epochs_ac, not args.no_probes, args.seed)
+                        args.epochs_ac, not args.no_probes, args.seed,
+                        args.hopfield_steps, args.hidden_target, args.sparsity_weight)
     print_history(history, args.every)
     if args.plot:
         plot_history(history, args.plot)
