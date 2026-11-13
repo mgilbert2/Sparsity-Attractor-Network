@@ -7,11 +7,12 @@ import numpy as np
 from src.abac import run
 from src.autoencoder import Autoencoder
 from src.hopfield import Hopfield, sigmoid
+from src.sparsity import k_winners_take_all
 
 
 def reconstruction_loss(net, x, target):
     """Measure cross-entropy plus the optional hidden population penalty."""
-    hidden = net.hopfield.forward(net.encode(x))
+    hidden = net.hidden_state(x)
     output = net.decode(hidden)
     penalty, _ = net.activity_penalty(hidden)
     return -np.sum(target * np.log(output)
@@ -94,10 +95,18 @@ class AutoencoderTests(unittest.TestCase):
         """The hidden activity penalty must backpropagate through every connection."""
         self.check_training_gradients(hidden_target=0.1)
 
-    def check_training_gradients(self, hidden_target):
+    def test_kwta_training_gradients(self):
+        """Gradients through the k-winner readout must match finite differences."""
+        self.check_training_gradients(hidden_target=None, sparsity=2 / 3)
+
+    def test_kwta_with_activity_penalty_gradients(self):
+        """Hard gating and the soft activity objective must compose correctly."""
+        self.check_training_gradients(hidden_target=0.1, sparsity=2 / 3)
+
+    def check_training_gradients(self, hidden_target, sparsity=1.0):
         """Compare a complete training step with numerical objective derivatives."""
         net = Autoencoder(4, 3, lr=0.1, seed=3, hopfield_steps=2,
-                          hidden_target=hidden_target)
+                          hidden_target=hidden_target, sparsity=sparsity)
         net.hopfield.W_R *= 5
         x = np.array([1.0, 0.0, 1.0, 0.0])
         target = np.array([0.0, 1.0, 1.0, 0.0])
@@ -163,11 +172,19 @@ class AutoencoderTests(unittest.TestCase):
 
     def test_zero_steps_matches_original_model(self):
         """Disabling recurrence must preserve the old forward and training rules."""
-        net = Autoencoder(4, 3, lr=0.2, seed=4, hopfield_steps=0)
+        self.check_feedforward_equivalence(sparsity=1.0)
+
+    def test_zero_steps_matches_kwta_model(self):
+        """Disabling recurrence must preserve the remote k-winner model's rules."""
+        self.check_feedforward_equivalence(sparsity=2 / 3)
+
+    def check_feedforward_equivalence(self, sparsity):
+        """Compare a forward pass and weight update to the feedforward equations."""
+        net = Autoencoder(4, 3, lr=0.2, seed=4, hopfield_steps=0, sparsity=sparsity)
         x = np.array([1.0, 0.0, 0.0, 1.0])
         target = np.array([1.0, 1.0, 0.0, 0.0])
         recurrent_before = net.hopfield.W_R.copy()
-        hidden = sigmoid(x @ net.W + net.b)
+        hidden = k_winners_take_all(sigmoid(x @ net.W + net.b), net.k)
         output = sigmoid(hidden @ net.W_out + net.b_out)
         np.testing.assert_allclose(net.forward(x), output, atol=1e-12)
         d_output = output - target
